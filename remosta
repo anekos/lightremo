@@ -87,6 +87,7 @@ class RemoSta
 
   def open(device_path = '/dev/ttyUSB0', &block)
     @sp = SerialPort.new(device_path, 115200, 8, 1, SerialPort::NONE)
+    @sp.read_timeout = 500
     return unless block
     begin
       block.call(self)
