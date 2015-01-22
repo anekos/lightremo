@@ -30,7 +30,8 @@ class RemoSta
     BlinkLed = 0x69
     Receive = 0x72
     Send = 0x74
-    ChannelAYellow = 0x31
+
+    ChannelBase = 0x30
 
     LedResult1 = 0x4f
     LedResult2 = 0x59
@@ -55,10 +56,10 @@ class RemoSta
     @sp.read(1).unpack("C")[0]
   end
 
-  def except (code_name, *value_names)
-    @sp.write([Code.const_get(code_name)].pack("C")) if code_name
+  def except (code, *value_names)
+    @sp.write([Symbol === code ? Code.const_get(code) : code].pack("C")) if code
     retval = @sp.read(1).unpack("C")[0]
-    raise "Error(%s): %.2x" % [code_name, retval] unless value_names.map {|it| Code.const_get(it) }.include?(retval)
+    raise "Error(%s): %.2x" % [code, retval] unless value_names.map {|it| Code.const_get(it) }.include?(retval)
   end
 
   def recv
@@ -70,14 +71,14 @@ class RemoSta
     signal.unpack("H*")
   end
 
-  def send(data, hex_string: true)
+  def send(data, hex_string: true, channel: 1)
     data = [data].pack("H*") if hex_string
 
     raise "Signal length is not valid: #{data.length}." unless data.length == SignalLength
 
     except(:BlinkLed, :LedResult1, :LedResult2)
     except(:Send, :SendResult)
-    except(:ChannelAYellow, :ChannelResult)
+    except(Code::ChannelBase + channel, :ChannelResult)
 
     @sp.write(data)
 
@@ -101,11 +102,50 @@ class RemoSta
 end
 
 if __FILE__ == $0 then
-  sub_command, hex_data = *ARGV
+  require 'yaml'
+  require 'pp'
+  require 'pathname'
+
+  sub_command, hex_data, *rest = *ARGV
+
+  macros = YAML.load(File.read(Pathname(ENV['HOME']) + '.remocon.yaml'))
+
+  if macro = macros[sub_command]
+    STDERR.puts('Sending.')
+
+    RemoSta.new do
+      |it|
+      second = false
+
+      send = nil
+
+      sends = proc do
+        |macro|
+        macro.each(&send)
+      end
+
+      send = proc do
+        |m|
+        if String === m
+          sends.call(macros[m])
+        else
+          sleep 1 if second
+          it.send(m['hex'], channel: (m['channel'] || 1).to_i)
+          second = true
+        end
+      end
+
+      sends.call(macro)
+    end
+
+    STDERR.puts('Sent.')
+
+    exit
+  end
 
   if !sub_command or (sub_command == 'send' and !hex_data)
     STDERR.puts "usage: #$0 recv"
-    STDERR.puts "usage: #$0 send <HEX_DATA>"
+    STDERR.puts "usage: #$0 send [-c <CHANNEL>] <HEX_DATA>"
     exit 1
   end
 
@@ -116,7 +156,15 @@ if __FILE__ == $0 then
     STDERR.puts('Received.')
   when 'send'
     STDERR.puts('Sending.')
-    RemoSta.new {|it| it.send(hex_data) }
+
+    if hex_data == '-c'
+      channel, hex_data = *rest
+    else
+      channel = 1
+    end
+
+    RemoSta.new {|it| it.send(hex_data, channel: channel.to_i) }
+
     STDERR.puts('Sent.')
   else
     STDERR.puts("No such sub-command: #{sub_command}")
